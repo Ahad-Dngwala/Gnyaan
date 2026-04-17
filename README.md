@@ -124,10 +124,9 @@ mobile/lib/
 
 | Method | Route | Auth | Purpose |
 |---|---|---|---|
-| POST | `/auth/register` | ✗ | Create user |
-| POST | `/auth/login` | ✗ | Returns JWT |
-| POST | `/documents/upload` | ✓ | Upload file, triggers both pipelines |
-| GET | `/documents` | ✓ | List user's documents |
+| POST | `/api/auth` | ✗ | Create user & authorize |
+| POST | `/api/upload` | ✓ | Upload file, triggers both pipelines |
+| GET | `/api/user/documents` | ✓ | List user's documents |
 | GET | `/summary/:docId` | ✓ | Fetch stored summary |
 | POST | `/query` | ✓ | `{ docId, question }` → RAG answer |
 | GET | `/export/:docId` | ✓ | Stream PDF of summary |
