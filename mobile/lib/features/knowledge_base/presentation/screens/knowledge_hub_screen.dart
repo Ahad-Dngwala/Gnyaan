@@ -4,12 +4,15 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:percent_indicator/percent_indicator.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:gnyaan/core/theme/app_colors.dart';
 import 'package:gnyaan/core/theme/app_text_styles.dart';
 import 'package:gnyaan/core/constants/app_constants.dart';
 import 'package:gnyaan/shared/widgets/glass_card.dart';
 import 'package:gnyaan/shared/widgets/app_buttons.dart';
 import 'package:gnyaan/shared/widgets/skeleton_loaders.dart';
+import 'package:gnyaan/features/knowledge_base/services/document_service.dart';
+import 'package:gnyaan/features/summary/presentation/screens/summary_screen.dart';
 import '../widgets/upload_dropzone.dart';
 import '../widgets/document_card.dart';
 import '../widgets/stats_row.dart';
@@ -26,60 +29,11 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen>
   late AnimationController _headerGlowController;
   late ScrollController _scrollController;
   final TextEditingController _searchController = TextEditingController();
+  final DocumentService _documentService = DocumentService();
   bool _headerCompacted = false;
   bool _isSearchFocused = false;
-
-  // Demo data
-  final List<DocModel> _docs = [
-    DocModel(
-      id: '1',
-      name: 'System Architecture v3.pdf',
-      type: 'PDF',
-      size: '4.2 MB',
-      pages: 42,
-      status: DocStatus.indexed,
-      progress: 1.0,
-      addedDate: '2 hours ago',
-      chunks: 186,
-      color: AppColors.brand,
-    ),
-    DocModel(
-      id: '2',
-      name: 'Q3 Financial Report.docx',
-      type: 'DOCX',
-      size: '1.8 MB',
-      pages: 18,
-      status: DocStatus.summarizing,
-      progress: 0.62,
-      addedDate: 'Just now',
-      chunks: 73,
-      color: AppColors.warning,
-    ),
-    DocModel(
-      id: '3',
-      name: 'Research Paper — LLMs.pdf',
-      type: 'PDF',
-      size: '7.1 MB',
-      pages: 64,
-      status: DocStatus.indexed,
-      progress: 1.0,
-      addedDate: 'Yesterday',
-      chunks: 312,
-      color: AppColors.success,
-    ),
-    DocModel(
-      id: '4',
-      name: 'Product Roadmap 2026.txt',
-      type: 'TXT',
-      size: '0.3 MB',
-      pages: 5,
-      status: DocStatus.indexed,
-      progress: 1.0,
-      addedDate: '3 days ago',
-      chunks: 28,
-      color: AppColors.accent,
-    ),
-  ];
+  bool _isLoading = true;
+  List<DocModel> _docs = [];
 
   @override
   void initState() {
@@ -95,6 +49,25 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen>
           setState(() => _headerCompacted = compact);
         }
       });
+    _fetchDocuments();
+  }
+
+  Future<void> _fetchDocuments() async {
+    setState(() => _isLoading = true);
+    try {
+      final rawDocs = await _documentService.getUserDocuments();
+      setState(() {
+        _docs = rawDocs.map((json) => DocModel.fromJson(json)).toList();
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load documents: $e')),
+        );
+      }
+    }
   }
 
   @override
@@ -306,17 +279,85 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen>
     );
   }
 
-  void _handleUpload() {
-    // TODO: file_picker integration
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _UploadProgressSheet(),
-    );
+  Future<void> _handleUpload() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'docx', 'txt'],
+        allowMultiple: true,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final paths = result.files
+          .where((f) => f.path != null)
+          .map((f) => f.path!)
+          .toList();
+      final names = result.files
+          .where((f) => f.path != null)
+          .map((f) => f.name)
+          .toList();
+
+      if (paths.isEmpty) return;
+
+      // Show progress sheet
+      if (mounted) {
+        showModalBottomSheet(
+          context: context,
+          backgroundColor: Colors.transparent,
+          builder: (_) => const _UploadProgressSheet(),
+        );
+      }
+
+      await _documentService.uploadFiles(
+        filePaths: paths,
+        fileNames: names,
+      );
+
+      // Close the progress sheet
+      if (mounted) Navigator.of(context).pop();
+
+      // Refresh the document list
+      await _fetchDocuments();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(LucideIcons.checkCircle2,
+                    size: 16, color: AppColors.success),
+                const SizedBox(width: 10),
+                Text('${paths.length} file(s) uploaded successfully!',
+                    style: AppTextStyles.labelMd),
+              ],
+            ),
+            backgroundColor: AppColors.bg600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.md)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: $e')),
+        );
+      }
+    }
   }
 
   void _openDocument(DocModel doc) {
-    Navigator.of(context).pushNamed('/document', arguments: doc.id);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SummaryScreen(
+          documentId: doc.id,
+          documentTitle: doc.name,
+        ),
+      ),
+    );
   }
 
   void _showFilterSheet() {
@@ -999,4 +1040,80 @@ class DocModel {
   final String addedDate;
   final int chunks;
   final Color color;
+
+  /// Parse a backend JSON document into a DocModel.
+  factory DocModel.fromJson(Map<String, dynamic> json) {
+    final status = _parseStatus(json['status'] as String? ?? 'PROCESSING');
+    final fileType = _parseFileType(json['fileType'] as String? ?? '');
+    final fileSize = json['fileSize'] as int? ?? 0;
+    final title = json['title'] as String? ?? json['originalFileName'] as String? ?? 'Untitled';
+    final createdAt = json['createdAt'] as String?;
+
+    return DocModel(
+      id: json['_id'] as String? ?? '',
+      name: title,
+      type: fileType,
+      size: _formatFileSize(fileSize),
+      pages: 0, // Backend doesn't track pages
+      status: status,
+      progress: status == DocStatus.indexed ? 1.0 : 0.5,
+      addedDate: _timeAgo(createdAt),
+      chunks: json['chunkCount'] as int? ?? 0,
+      color: _colorForType(fileType),
+    );
+  }
+
+  static DocStatus _parseStatus(String s) {
+    switch (s.toUpperCase()) {
+      case 'ACTIVE':
+        return DocStatus.indexed;
+      case 'PROCESSING':
+        return DocStatus.summarizing;
+      case 'FAILED':
+        return DocStatus.error;
+      default:
+        return DocStatus.queued;
+    }
+  }
+
+  static String _parseFileType(String mime) {
+    if (mime.contains('pdf')) return 'PDF';
+    if (mime.contains('word') || mime.contains('docx')) return 'DOCX';
+    if (mime.contains('text')) return 'TXT';
+    return 'FILE';
+  }
+
+  static String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  static Color _colorForType(String type) {
+    switch (type) {
+      case 'PDF':
+        return AppColors.brand;
+      case 'DOCX':
+        return AppColors.warning;
+      case 'TXT':
+        return AppColors.accent;
+      default:
+        return AppColors.success;
+    }
+  }
+
+  static String _timeAgo(String? iso) {
+    if (iso == null) return 'Just now';
+    try {
+      final dt = DateTime.parse(iso);
+      final diff = DateTime.now().difference(dt);
+      if (diff.inMinutes < 1) return 'Just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      if (diff.inDays < 7) return '${diff.inDays}d ago';
+      return '${dt.day}/${dt.month}/${dt.year}';
+    } catch (_) {
+      return 'Just now';
+    }
+  }
 }

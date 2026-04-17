@@ -1,180 +1,163 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:gnyaan/core/theme/app_colors.dart';
 import 'package:gnyaan/core/theme/app_text_styles.dart';
 import 'package:gnyaan/core/constants/app_constants.dart';
-import 'package:gnyaan/shared/widgets/glass_card.dart';
 import 'package:gnyaan/shared/widgets/app_buttons.dart';
+import 'package:gnyaan/features/summary/services/summary_service.dart';
 import '../widgets/tldr_card.dart';
-import '../widgets/concept_chips.dart';
-import '../widgets/insight_tile.dart';
 
 class SummaryScreen extends StatefulWidget {
-  const SummaryScreen({super.key});
+  const SummaryScreen({super.key, this.documentId, this.documentTitle});
+
+  final String? documentId;
+  final String? documentTitle;
 
   @override
   State<SummaryScreen> createState() => _SummaryScreenState();
 }
 
-class _SummaryScreenState extends State<SummaryScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-
-  static const _tabs = ['Summary', 'Concepts', 'Glossary', 'Insights'];
-
-  // Demo data
-  static const String _tldr =
-      'The System Architecture v3 document defines a cloud-native microservices platform with a PostgreSQL + pgvector backend for semantic search, a Redis caching layer, and a React frontend served via CDN. The RAG pipeline processes documents using sliding-window chunking and cosine similarity retrieval.';
-
-  static const List<String> _concepts = [
-    'Microservices',
-    'pgvector',
-    'RAG Pipeline',
-    'Redis Cache',
-    'Cosine Similarity',
-    'REST API',
-    'Docker',
-    'CI/CD',
-    'Semantic Search',
-    'CDN',
-  ];
-
-  static const List<_GlossaryItem> _glossary = [
-    _GlossaryItem(
-      term: 'RAG',
-      definition:
-          'Retrieval-Augmented Generation — a technique where relevant document chunks are retrieved and injected into an LLM prompt to ground responses in source material.',
-    ),
-    _GlossaryItem(
-      term: 'pgvector',
-      definition:
-          'A PostgreSQL extension that enables storing and querying high-dimensional float vectors, used here for semantic similarity search.',
-    ),
-    _GlossaryItem(
-      term: 'Embedding',
-      definition:
-          'A dense numerical vector representation of text, capturing semantic meaning so that similar texts have similar vectors.',
-    ),
-    _GlossaryItem(
-      term: 'Cosine Similarity',
-      definition:
-          'A geometric measure of similarity between two vectors, computed as the cosine of the angle between them. Ranges from -1 to 1.',
-    ),
-  ];
-
-  static const List<InsightModel> _insights = [
-    InsightModel(
-      icon: LucideIcons.zap,
-      title: 'Performance Bottleneck',
-      body: 'The embedding generation step is the slowest part (~2.3s / chunk). Consider batching API calls.',
-      color: AppColors.warning,
-    ),
-    InsightModel(
-      icon: LucideIcons.shieldCheck,
-      title: 'Security Note',
-      body: 'API keys are loaded from environment variables, which is correct. Ensure secrets are rotated every 90 days.',
-      color: AppColors.success,
-    ),
-    InsightModel(
-      icon: LucideIcons.lightbulb,
-      title: 'Suggested Improvement',
-      body: 'Adding a reranker model can increase retrieval precision from ~82% to ~94%.',
-      color: AppColors.brand,
-    ),
-    InsightModel(
-      icon: LucideIcons.alertTriangle,
-      title: 'Missing Documentation',
-      body: 'Section 4.3 references a "failover strategy" but provides no implementation details.',
-      color: AppColors.error,
-    ),
-  ];
+class _SummaryScreenState extends State<SummaryScreen> {
+  final SummaryService _summaryService = SummaryService();
+  bool _isLoading = false;
+  String _title = 'Select a document';
+  String _tldr = '';
+  String _summary = '';
+  bool _cached = false;
+  int _responseTimeMs = 0;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: _tabs.length, vsync: this);
+    if (widget.documentId != null) {
+      _title = widget.documentTitle ?? 'Document';
+      _fetchSummary();
+    }
   }
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
+  Future<void> _fetchSummary() async {
+    if (widget.documentId == null) return;
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final data = await _summaryService.getSummary(widget.documentId!);
+      setState(() {
+        _isLoading = false;
+        _title = data['title'] as String? ?? _title;
+        _tldr = data['tldr'] as String? ?? '';
+        _summary = data['summary'] as String? ?? '';
+        _cached = data['cached'] as bool? ?? false;
+        _responseTimeMs = data['responseTimeMs'] as int? ?? 0;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg800,
-      body: NestedScrollView(
+      body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
-        headerSliverBuilder: (_, __) => [
+        slivers: [
           // ── Header ──────────────────────────────────────────────────────
-          SliverToBoxAdapter(child: _SummaryHeader()),
-          // ── Tab bar ──────────────────────────────────────────────────────
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _StickyTabBarDelegate(
-              TabBar(
-                controller: _tabController,
-                tabs: _tabs.map((t) => Tab(text: t)).toList(),
-                isScrollable: false,
-                labelStyle: AppTextStyles.labelLg,
-                unselectedLabelStyle: AppTextStyles.labelMd,
-                labelColor: AppColors.brand,
-                unselectedLabelColor: AppColors.textSubtle,
-                indicatorColor: AppColors.brand,
-                indicatorWeight: 2,
-                indicatorSize: TabBarIndicatorSize.label,
-                dividerColor: AppColors.border200,
-              ),
-            ),
+          SliverToBoxAdapter(child: _SummaryHeader(title: _title)),
+
+          // ── Content ─────────────────────────────────────────────────────
+          SliverFillRemaining(
+            hasScrollBody: true,
+            child: _buildContent(),
           ),
         ],
-        body: TabBarView(
-          controller: _tabController,
-          children: [
-            // ── Summary Tab ──────────────────────────────────────────────
-            _SummaryTab(tldr: _tldr),
-            // ── Concepts Tab ─────────────────────────────────────────────
-            _ConceptsTab(concepts: _concepts),
-            // ── Glossary Tab ─────────────────────────────────────────────
-            _GlossaryTab(items: _glossary),
-            // ── Insights Tab ─────────────────────────────────────────────
-            _InsightsTab(insights: _insights),
-          ],
-        ),
-      ),
-
-      // ── FAB Export ───────────────────────────────────────────────────────
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: PrimaryButton(
-          label: 'Export PDF',
-          icon: LucideIcons.download,
-          onPressed: _exportPdf,
-          width: 160,
-        ),
       ),
     );
   }
 
-  void _exportPdf() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(LucideIcons.checkCircle2,
-                size: 16, color: AppColors.success),
-            const SizedBox(width: 10),
-            Text('Export started!', style: AppTextStyles.labelMd),
+  Widget _buildContent() {
+    // No document selected
+    if (widget.documentId == null) {
+      return _NoDocumentState();
+    }
+
+    // Loading
+    if (_isLoading) {
+      return _LoadingState();
+    }
+
+    // Error
+    if (_error != null) {
+      return _ErrorState(message: _error!, onRetry: _fetchSummary);
+    }
+
+    // Success — show TL;DR and Summary
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.all(AppSpacing.screenPadding),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Cache / time badge
+          Row(
+            children: [
+              if (_cached)
+                _Badge(
+                  icon: LucideIcons.database,
+                  label: 'Cached',
+                  color: AppColors.success,
+                ),
+              if (!_cached && _responseTimeMs > 0)
+                _Badge(
+                  icon: LucideIcons.zap,
+                  label: '${_responseTimeMs}ms',
+                  color: AppColors.warning,
+                ),
+            ],
+          ).animate().fadeIn(),
+
+          const SizedBox(height: 16),
+
+          // TL;DR card
+          if (_tldr.isNotEmpty) ...[
+            TldrCard(text: _tldr),
+            const SizedBox(height: 24),
           ],
-        ),
-        backgroundColor: AppColors.bg600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.md)),
+
+          // Full Summary
+          if (_summary.isNotEmpty) ...[
+            Text('Full Summary', style: AppTextStyles.h2)
+                .animate()
+                .fadeIn(delay: 200.ms),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.bg600,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                border: Border.all(color: AppColors.border200),
+              ),
+              child: Text(
+                _summary,
+                style: AppTextStyles.bodyMd.copyWith(
+                  color: AppColors.textMuted,
+                  height: 1.7,
+                ),
+              ),
+            ).animate().fadeIn(delay: 300.ms),
+          ],
+
+          const SizedBox(height: 100),
+        ],
       ),
     );
   }
@@ -185,6 +168,9 @@ class _SummaryScreenState extends State<SummaryScreen>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _SummaryHeader extends StatelessWidget {
+  const _SummaryHeader({required this.title});
+  final String title;
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -215,7 +201,7 @@ class _SummaryHeader extends StatelessWidget {
                     icon: LucideIcons.share2,
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Share Document (Demo)')),
+                        const SnackBar(content: Text('Share (Demo)')),
                       );
                     },
                     size: 40,
@@ -241,20 +227,10 @@ class _SummaryHeader extends StatelessWidget {
                     color: Colors.white, size: 24),
               )
                   .animate()
-                  .scale(begin: const Offset(0.7, 0.7), curve: Curves.elasticOut),
+                  .scale(
+                      begin: const Offset(0.7, 0.7), curve: Curves.elasticOut),
               const SizedBox(height: 16),
-              Text('System Architecture v3',
-                  style: AppTextStyles.h1),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  _MetaChip(icon: LucideIcons.fileType2, label: 'PDF'),
-                  const SizedBox(width: 8),
-                  _MetaChip(icon: LucideIcons.book, label: '42 pages'),
-                  const SizedBox(width: 8),
-                  _MetaChip(icon: LucideIcons.database, label: '186 chunks'),
-                ],
-              ),
+              Text(title, style: AppTextStyles.h1),
               const SizedBox(height: 8),
             ],
           ),
@@ -264,286 +240,145 @@ class _SummaryHeader extends StatelessWidget {
   }
 }
 
-class _MetaChip extends StatelessWidget {
-  const _MetaChip({required this.icon, required this.label});
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── States ────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _NoDocumentState extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: AppColors.bg600,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: AppColors.border200),
+            ),
+            child: const Icon(LucideIcons.fileQuestion,
+                size: 36, color: AppColors.border300),
+          ),
+          const SizedBox(height: 20),
+          Text('No document selected', style: AppTextStyles.h2),
+          const SizedBox(height: 8),
+          Text(
+            'Tap a document in the Knowledge Hub\nto generate its summary.',
+            style: AppTextStyles.bodyMd
+                .copyWith(color: AppColors.textMuted, height: 1.6),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoadingState extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              gradient: AppColors.brandGradient,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: const Icon(LucideIcons.sparkles,
+                color: Colors.white, size: 28),
+          )
+              .animate(onPlay: (c) => c.repeat())
+              .shimmer(
+                  duration: 1500.ms,
+                  color: Colors.white.withOpacity(0.3)),
+          const SizedBox(height: 20),
+          Text('Generating summary...', style: AppTextStyles.h3),
+          const SizedBox(height: 8),
+          Text(
+            'Analyzing document content with AI',
+            style: AppTextStyles.bodySm
+                .copyWith(color: AppColors.textMuted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ErrorState extends StatelessWidget {
+  const _ErrorState({required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.screenPadding),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(LucideIcons.alertTriangle,
+                size: 48, color: AppColors.error),
+            const SizedBox(height: 16),
+            Text('Summary failed', style: AppTextStyles.h2),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: AppTextStyles.bodyMd
+                  .copyWith(color: AppColors.textMuted),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            PrimaryButton(label: 'Retry', onPressed: onRetry, width: 140),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── Badge chip ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _Badge extends StatelessWidget {
+  const _Badge(
+      {required this.icon, required this.label, required this.color});
   final IconData icon;
   final String label;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.bg500,
+        color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.border200),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 11, color: AppColors.iconSubtle),
-          const SizedBox(width: 4),
-          Text(label, style: AppTextStyles.caption),
-        ],
-      ),
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── Tabs ─────────────────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class _SummaryTab extends StatelessWidget {
-  const _SummaryTab({required this.tldr});
-  final String tldr;
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.all(AppSpacing.screenPadding),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TldrCard(text: tldr),
-          const SizedBox(height: 20),
-          _ReadingStats(),
-        ],
-      ),
-    );
-  }
-}
-
-class _ConceptsTab extends StatelessWidget {
-  const _ConceptsTab({required this.concepts});
-  final List<String> concepts;
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.all(AppSpacing.screenPadding),
-      child: ConceptChipsGrid(concepts: concepts),
-    );
-  }
-}
-
-class _GlossaryTab extends StatelessWidget {
-  const _GlossaryTab({required this.items});
-  final List<_GlossaryItem> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimationLimiter(
-      child: ListView.builder(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.all(AppSpacing.screenPadding),
-        itemCount: items.length,
-        itemBuilder: (_, i) => AnimationConfiguration.staggeredList(
-          position: i,
-          duration: const Duration(milliseconds: 400),
-          child: SlideAnimation(
-            verticalOffset: 30,
-            child: FadeInAnimation(
-              child: _GlossaryTile(item: items[i]),
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: AppTextStyles.caption.copyWith(
+              color: color,
+              fontWeight: FontWeight.bold,
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _GlossaryTile extends StatefulWidget {
-  const _GlossaryTile({required this.item});
-  final _GlossaryItem item;
-
-  @override
-  State<_GlossaryTile> createState() => _GlossaryTileState();
-}
-
-class _GlossaryTileState extends State<_GlossaryTile> {
-  bool _expanded = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => setState(() => _expanded = !_expanded),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        decoration: BoxDecoration(
-          color: AppColors.bg600,
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          border: Border.all(
-            color: _expanded
-                ? AppColors.brand.withOpacity(0.3)
-                : AppColors.border200,
-          ),
-        ),
-        child: AnimatedSize(
-          duration: AppDurations.normal,
-          curve: Curves.easeInOut,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        gradient: AppColors.brandGradient,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        widget.item.term,
-                        style: AppTextStyles.labelMd.copyWith(
-                            color: Colors.white, fontSize: 12),
-                      ),
-                    ),
-                    const Spacer(),
-                    AnimatedRotation(
-                      turns: _expanded ? 0.5 : 0,
-                      duration: AppDurations.normal,
-                      child: Icon(LucideIcons.chevronDown,
-                          size: 16, color: AppColors.iconSubtle),
-                    ),
-                  ],
-                ),
-                if (_expanded) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    widget.item.definition,
-                    style: AppTextStyles.bodyMd
-                        .copyWith(color: AppColors.textMuted, height: 1.6),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _InsightsTab extends StatelessWidget {
-  const _InsightsTab({required this.insights});
-  final List<InsightModel> insights;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimationLimiter(
-      child: ListView.builder(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.all(AppSpacing.screenPadding),
-        itemCount: insights.length,
-        itemBuilder: (_, i) => AnimationConfiguration.staggeredList(
-          position: i,
-          duration: const Duration(milliseconds: 400),
-          child: SlideAnimation(
-            horizontalOffset: 30,
-            child: FadeInAnimation(
-              child: InsightTile(insight: insights[i]),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReadingStats extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.bg600,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        border: Border.all(color: AppColors.border200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Document Stats', style: AppTextStyles.h3),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _StatItem(label: 'Words', value: '12,420', icon: LucideIcons.type),
-              _StatItem(label: 'Read Time', value: '47 min', icon: LucideIcons.clock),
-              _StatItem(label: 'Complexity', value: 'Advanced', icon: LucideIcons.graduationCap),
-            ],
-          ),
         ],
       ),
     );
   }
-}
-
-class _StatItem extends StatelessWidget {
-  const _StatItem({required this.label, required this.value, required this.icon});
-  final String label;
-  final String value;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Icon(icon, size: 18, color: AppColors.brand),
-          const SizedBox(height: 6),
-          Text(value,
-              style: AppTextStyles.h3.copyWith(color: AppColors.text)),
-          Text(label, style: AppTextStyles.caption),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Sticky tab bar helper delegate ─────────────────────────────────────────────
-
-class _StickyTabBarDelegate extends SliverPersistentHeaderDelegate {
-  const _StickyTabBarDelegate(this.tabBar);
-  final TabBar tabBar;
-
-  @override
-  double get minExtent => tabBar.preferredSize.height;
-
-  @override
-  double get maxExtent => tabBar.preferredSize.height;
-
-  @override
-  Widget build(
-          BuildContext context, double shrinkOffset, bool overlapsContent) =>
-      Container(color: AppColors.bg800, child: tabBar);
-
-  @override
-  bool shouldRebuild(_StickyTabBarDelegate old) => tabBar != old.tabBar;
-}
-
-// ── Data models ────────────────────────────────────────────────────────────────
-
-class _GlossaryItem {
-  const _GlossaryItem({required this.term, required this.definition});
-  final String term;
-  final String definition;
-}
-
-class InsightModel {
-  const InsightModel({
-    required this.icon,
-    required this.title,
-    required this.body,
-    required this.color,
-  });
-  final IconData icon;
-  final String title;
-  final String body;
-  final Color color;
 }

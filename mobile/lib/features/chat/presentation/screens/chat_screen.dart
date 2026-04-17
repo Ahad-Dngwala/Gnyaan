@@ -7,6 +7,7 @@ import 'package:gnyaan/core/theme/app_text_styles.dart';
 import 'package:gnyaan/core/constants/app_constants.dart';
 import 'package:gnyaan/shared/widgets/glass_card.dart';
 import 'package:gnyaan/shared/widgets/app_buttons.dart';
+import 'package:gnyaan/features/chat/services/chat_service.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/source_citation.dart';
 import '../widgets/active_doc_selector.dart';
@@ -22,50 +23,53 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocus = FocusNode();
+  final ChatService _chatService = ChatService();
   bool _isTyping = false;
   bool _isStreaming = false;
-  String _activeDoc = 'System Architecture v3.pdf';
+  String _activeDoc = 'All Documents';
 
-  // Demo conversation
-  final List<ChatMessage> _messages = [
-    ChatMessage(
-      id: '1',
-      role: MessageRole.assistant,
-      content:
-          'Hello! I\'m ready to help you explore your knowledge base. I currently have **System Architecture v3** loaded and indexed with 186 chunks. What would you like to know?',
-      timestamp: DateTime.now().subtract(const Duration(minutes: 5)),
-      sources: [],
-    ),
-    ChatMessage(
-      id: '2',
-      role: MessageRole.user,
-      content: 'What is the primary database used in the system?',
-      timestamp: DateTime.now().subtract(const Duration(minutes: 4)),
-      sources: [],
-    ),
-    ChatMessage(
-      id: '3',
-      role: MessageRole.assistant,
-      content:
-          'Based on the architecture document, the primary database is **PostgreSQL 15** with a vector extension (pgvector) for semantic search. The system also uses Redis as a caching layer for frequently accessed embeddings.',
-      timestamp: DateTime.now().subtract(const Duration(minutes: 4)),
-      sources: [
-        ChatSource(
-          docName: 'System Architecture v3',
-          page: 12,
-          snippet:
-              '...the primary data store is PostgreSQL 15 configured with the pgvector extension to enable similarity search across embedding vectors...',
-          similarity: 0.94,
-        ),
-        ChatSource(
-          docName: 'System Architecture v3',
-          page: 14,
-          snippet: 'Redis is deployed as an in-memory cache for embedding results...',
-          similarity: 0.87,
-        ),
-      ],
-    ),
-  ];
+  final List<ChatMessage> _messages = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChatHistory();
+  }
+
+  Future<void> _loadChatHistory() async {
+    try {
+      final history = await _chatService.getChatHistory();
+      if (history.isNotEmpty && mounted) {
+        setState(() {
+          _messages.addAll(history.map((m) => ChatMessage(
+                id: m['_id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+                role: m['role'] == 'user' ? MessageRole.user : MessageRole.assistant,
+                content: m['text'] as String? ?? '',
+                timestamp: m['timestamp'] != null
+                    ? DateTime.tryParse(m['timestamp'].toString()) ?? DateTime.now()
+                    : DateTime.now(),
+                sources: _parseSources(m['sources']),
+              )));
+        });
+        _scrollToBottom();
+      }
+    } catch (_) {
+      // Silent fail — empty chat is fine
+    }
+  }
+
+  List<ChatSource> _parseSources(dynamic sources) {
+    if (sources == null || sources is! List) return [];
+    return sources.map<ChatSource>((s) {
+      final map = s as Map<String, dynamic>;
+      return ChatSource(
+        docName: map['documentId']?.toString() ?? 'Source',
+        page: 0,
+        snippet: '',
+        similarity: (map['score'] as num?)?.toDouble() ?? 0.0,
+      );
+    }).toList();
+  }
 
   @override
   void dispose() {
@@ -134,7 +138,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
   }
 
-  void _sendMessage(String text) {
+  Future<void> _sendMessage(String text) async {
     if (text.trim().isEmpty) return;
     setState(() {
       _messages.add(ChatMessage(
@@ -149,30 +153,36 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
     _scrollToBottom();
 
-    // Simulate AI response after delay
-    Future.delayed(const Duration(seconds: 2), () {
+    try {
+      final response = await _chatService.sendQuery(text.trim());
       if (mounted) {
         setState(() {
           _isStreaming = false;
           _messages.add(ChatMessage(
             id: DateTime.now().millisecondsSinceEpoch.toString(),
             role: MessageRole.assistant,
-            content:
-                'This is a simulated AI response. Connect the RAG pipeline to get real answers sourced from your documents.',
+            content: response['answer'] as String? ?? 'No response received.',
             timestamp: DateTime.now(),
-            sources: [
-              ChatSource(
-                docName: _activeDoc,
-                page: 7,
-                snippet: 'Relevant passage from document...',
-                similarity: 0.91,
-              ),
-            ],
+            sources: _parseSources(response['sources']),
           ));
         });
         _scrollToBottom();
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isStreaming = false;
+          _messages.add(ChatMessage(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            role: MessageRole.assistant,
+            content: 'Sorry, something went wrong. Please try again.',
+            timestamp: DateTime.now(),
+            sources: [],
+          ));
+        });
+        _scrollToBottom();
+      }
+    }
   }
 
   void _handleSuggestion(String suggestion) {

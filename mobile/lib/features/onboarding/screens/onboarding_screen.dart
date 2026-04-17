@@ -215,7 +215,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   void _goToApp() {
-    Navigator.of(context).pushReplacementNamed('/home');
+    Navigator.of(context).pushReplacementNamed('/login');
   }
 }
 

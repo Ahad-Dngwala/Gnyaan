@@ -42,11 +42,11 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
     ),
   ];
 
-  final List<Widget> _screens = const [
-    KnowledgeHubScreen(),
-    ChatScreen(),
+  final List<Widget> _screens = [
+    const KnowledgeHubScreen(),
+    const ChatScreen(),
     SummaryScreen(),
-    _SettingsPlaceholder(),
+    const _SettingsPlaceholder(),
   ];
 
   @override
